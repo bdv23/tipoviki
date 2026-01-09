@@ -10,7 +10,7 @@ from telegram.ext import (
     filters
 )
 
-BOT_TOKEN = "8584353184:AAG2A8lVGJSi8bys-JFYJRNJKmb6I1ASYQI"
+# BOT_TOKEN = ""
 # RM_HOST = rm_host - будет содержать удаленный хост, который будем мониторить
 # RM_PORT = rm_port - будет содержать порт удаленного хоста, к которому будем подключаться
 # RM_USER = rm_user - будет содержать пользователя удаленного хоста
