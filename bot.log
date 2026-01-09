@@ -1,0 +1,8 @@
+2026-01-09 17:56:25,770 | INFO | HTTP Request: POST https://api.telegram.org/bot8584353184:AAG2A8lVGJSi8bys-JFYJRNJKmb6I1ASYQI/getUpdates "HTTP/1.1 200 OK"
+2026-01-09 17:56:35,918 | INFO | HTTP Request: POST https://api.telegram.org/bot8584353184:AAG2A8lVGJSi8bys-JFYJRNJKmb6I1ASYQI/getUpdates "HTTP/1.1 200 OK"
+2026-01-09 17:56:46,045 | INFO | HTTP Request: POST https://api.telegram.org/bot8584353184:AAG2A8lVGJSi8bys-JFYJRNJKmb6I1ASYQI/getUpdates "HTTP/1.1 200 OK"
+2026-01-09 17:56:56,183 | INFO | HTTP Request: POST https://api.telegram.org/bot8584353184:AAG2A8lVGJSi8bys-JFYJRNJKmb6I1ASYQI/getUpdates "HTTP/1.1 200 OK"
+2026-01-09 17:57:02,126 | INFO | HTTP Request: POST https://api.telegram.org/bot8584353184:AAG2A8lVGJSi8bys-JFYJRNJKmb6I1ASYQI/getUpdates "HTTP/1.1 200 OK"
+2026-01-09 17:57:02,126 | INFO | Application is stopping. This might take a moment.
+2026-01-09 17:57:02,127 | INFO | Scheduler has been shut down
+2026-01-09 17:57:02,141 | INFO | Application.stop() complete
