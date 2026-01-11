@@ -14,6 +14,9 @@ from telegram.ext import (
     filters
 )
 
+import psycopg2
+from psycopg2 import sql
+
 load_dotenv()
 
 logging.basicConfig(
@@ -22,7 +25,7 @@ logging.basicConfig(
     level=logging.INFO
 )
 
-EMAIL, PHONE, PASSWORD, APT_PACKAGE = range(4)
+EMAIL_INPUT, PHONE_INPUT, CONFIRM_EMAIL_SAVE, CONFIRM_PHONE_SAVE, PASSWORD, APT_PACKAGE, DB_ACTION = range(7)
 
 def ssh_exec(command: str, timeout: int = 8) -> str:
     try:
@@ -44,13 +47,11 @@ def ssh_exec(command: str, timeout: int = 8) -> str:
     except Exception as e:
         return f"Ошибка SSH: {str(e)[:150]}"
 
-# --- Общие функции ---
 async def send_monitoring_result(update: Update, command: str, msg: str = "Выполняю запрос"):
     await update.message.reply_text(f"{msg}")
     out = await asyncio.to_thread(ssh_exec, command)
     await update.message.reply_text(out)
 
-# --- Команды анализа текста ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     await update.message.reply_text(
@@ -60,19 +61,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Доступные команды:\n"
         "/find_email\n/find_phone_number\n/verify_password\n\n"
         "Команды мониторинга:\n"
-        "/get_release\n/get_uname\n/get_up\n/get_df\n/get_free\n/get_mpstat\n/get_w\n/get_auths\n/get_critical\n/get_ps\n/get_ss\n/get_apt_list\n/get_services"
+        "/get_release\n/get_uname\n/get_uptime\n/get_df\n/get_free\n/get_mpstat\n/get_w\n/get_auths\n/get_critical\n/get_ps\n/get_ss\n/get_apt_list\n/get_services\n\n"
+        "Команды взаимодействия с базой данных\n"
+        "/get_repl_logs\n/get_emails\n/get_phone_numbers\n"
     )
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("HELP! -> /start")
 
 async def find_email_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Пришлите текст для поиска email-адресов:")
-    return EMAIL
+    await update.message.reply_text("Пришлите текст для поиска email:")
+    return EMAIL_INPUT
 
 async def find_phone_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Пришлите текст для поиска номеров телефонов:")
-    return PHONE
+    return PHONE_INPUT
 
 async def verify_password_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Пришлите пароль для проверки сложности:")
@@ -82,10 +85,21 @@ async def handle_email_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
     text = update.message.text
     emails = re.findall(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', text)
     if not emails:
-        await update.message.reply_text("Email-адреса не найдены.")
+        await update.message.reply_text("Email не найдены")
+        return ConversationHandler.END
+    result = "\n".join(f"{i+1}. {e}" for i, e in enumerate(emails))
+    await update.message.reply_text(f"Найдены email:\n{result}\n\nСохранить в базу данных? (y/n)")
+    context.user_data['emails_to_save'] = emails
+    return CONFIRM_EMAIL_SAVE
+
+async def confirm_email_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    answer = update.message.text.strip().lower()
+    if answer in ['да', 'yes', 'y', 'д']:
+        emails = context.user_data.get('emails_to_save', [])
+        msg = await asyncio.to_thread(db_insert_emails, emails)
+        await update.message.reply_text(msg)
     else:
-        result = "\n".join(f"{i+1}. {e}" for i, e in enumerate(emails))
-        await update.message.reply_text(result)
+        await update.message.reply_text("Сохранение отменено")
     return ConversationHandler.END
 
 async def handle_phone_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -93,11 +107,22 @@ async def handle_phone_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
     pattern = r'(?:\+7|8)[\s\-()]*(\d{3})[\s\-()]*(\d{3})[\s\-]?(\d{2})[\s\-]?(\d{2})'
     matches = re.findall(pattern, text)
     if not matches:
-        await update.message.reply_text("Номера телефонов не найдены.")
+        await update.message.reply_text("Номера телефонов не найдены")
+        return ConversationHandler.END
+    numbers = [f"+7{a}{b}{c}{d}" for a, b, c, d in matches]
+    result = "\n".join(f"{i+1}. {n}" for i, n in enumerate(numbers))
+    await update.message.reply_text(f"Найдены номера:\n{result}\n\nСохранить в базу данных? (y/n)")
+    context.user_data['phones_to_save'] = numbers
+    return CONFIRM_PHONE_SAVE
+
+async def confirm_phone_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    answer = update.message.text.strip().lower()
+    if answer in ['да', 'yes', 'y', 'д']:
+        phones = context.user_data.get('phones_to_save', [])
+        msg = await asyncio.to_thread(db_insert_phones, phones)
+        await update.message.reply_text(msg)
     else:
-        numbers = [f"8 ({a}) {b}-{c}-{d}" for a, b, c, d in matches]
-        result = "\n".join(f"{i+1}. {n}" for i, n in enumerate(numbers))
-        await update.message.reply_text(result)
+        await update.message.reply_text("Сохранение отменено")
     return ConversationHandler.END
 
 async def handle_password_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -112,7 +137,6 @@ async def handle_password_input(update: Update, context: ContextTypes.DEFAULT_TY
         await update.message.reply_text("Пароль простой")
     return ConversationHandler.END
 
-# --- Команды мониторинга ---
 async def get_release(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_monitoring_result(update, "cat /etc/os-release | head -n 5", "Информация о релизе")
 
@@ -167,6 +191,97 @@ async def get_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def unknown(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Неизвестная команда. /start")
 
+async def get_repl_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Логи репликации PostgreSQL")
+    cmd = "ls /var/log/postgresql/postgresql-*.log 2>/dev/null | sort | tail -n1"
+    log_file = await asyncio.to_thread(ssh_exec, cmd)
+    if not log_file.strip() or "No such file" in log_file:
+        await update.message.reply_text("Логи PostgreSQL не найдены")
+        return
+    log_file = log_file.strip()
+    grep_cmd = f"grep -i 'replication\\|standby\\|ready' {log_file} | tail -n 20"
+    out = await asyncio.to_thread(ssh_exec, grep_cmd)
+    if not out.strip():
+        out = "Логи репликации не обнаружены"
+    await update.message.reply_text(out[:4000])
+
+def db_query(query: str) -> str:
+    try:
+        conn = psycopg2.connect(
+            host=os.getenv("DB_HOST"),
+            port=os.getenv("DB_PORT"),
+            database=os.getenv("DB_DATABASE"),
+            user=os.getenv("DB_USER"),
+            password=os.getenv("DB_PASSWORD")
+        )
+        cur = conn.cursor()
+        cur.execute(query)
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        if not rows:
+            return "Нет данных"
+        result = "\n".join(f"{i+1}. {row[0]}" for i, row in enumerate(rows))
+        return result[:4000]
+    except Exception as e:
+        logging.error(f"DB error: {e}")
+        return f"Ошибка БД: {str(e)[:150]}"
+
+async def get_emails(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Еmail из БД")
+    query = "SELECT email FROM emails ORDER BY id DESC LIMIT 20;"
+    out = await asyncio.to_thread(db_query, query)
+    await update.message.reply_text(out)
+
+async def get_phone_numbers(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Номера телефонов из БД")
+    query = "SELECT phone FROM phone_numbers ORDER BY id DESC LIMIT 20;"
+    out = await asyncio.to_thread(db_query, query)
+    await update.message.reply_text(out)
+
+def db_insert_emails(emails: list) -> str:
+    try:
+        conn = psycopg2.connect(
+            host=os.getenv("DB_HOST"),
+            port=os.getenv("DB_PORT"),
+            database=os.getenv("DB_DATABASE"),
+            user=os.getenv("DB_USER"),
+            password=os.getenv("DB_PASSWORD")
+        )
+        cur = conn.cursor()
+        for email in emails:
+            cur.execute("INSERT INTO emails (email) VALUES (%s) ON CONFLICT DO NOTHING;", (email,))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return f"Успешно сохранено {len(emails)} email"
+    except Exception as e:
+        logging.error(f"DB insert error: {e}")
+        return f"Ошибка записи email: {str(e)[:150]}"
+
+def db_insert_phones(phones: list) -> str:
+    try:
+        conn = psycopg2.connect(
+            host=os.getenv("DB_HOST"),
+            port=os.getenv("DB_PORT"),
+            database=os.getenv("DB_DATABASE"),
+            user=os.getenv("DB_USER"),
+            password=os.getenv("DB_PASSWORD")
+        )
+        cur = conn.cursor()
+        for phone in phones:
+            cur.execute("INSERT INTO phone_numbers (phone) VALUES (%s) ON CONFLICT DO NOTHING;", (phone,))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return f"Успешно сохранено {len(phones)} номеров"
+    except Exception as e:
+        logging.error(f"DB insert error: {e}")
+        return f"Ошибка записи номеров: {str(e)[:150]}"
+
+
+
+
 def main():
     token = os.getenv("TOKEN")
     if not token:
@@ -183,13 +298,20 @@ def main():
     app.add_handler(CommandHandler("help", help_cmd))
 
     app.add_handler(ConversationHandler(
-        entry_points=[CommandHandler("find_email", find_email_start)],
-        states={EMAIL: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_email_input)]},
-        fallbacks=[]
+    entry_points=[CommandHandler("find_email", find_email_start)],
+    states={
+        EMAIL_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_email_input)],
+        CONFIRM_EMAIL_SAVE: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_email_save)]
+    },
+    fallbacks=[]
     ))
+
     app.add_handler(ConversationHandler(
         entry_points=[CommandHandler("find_phone_number", find_phone_start)],
-        states={PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_phone_input)]},
+        states={
+            PHONE_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_phone_input)],
+            CONFIRM_PHONE_SAVE: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_phone_save)]
+        },
         fallbacks=[]
     ))
     app.add_handler(ConversationHandler(
@@ -198,7 +320,6 @@ def main():
         fallbacks=[]
     ))
 
-    # Мониторинг
     app.add_handler(CommandHandler("get_release", get_release))
     app.add_handler(CommandHandler("get_uname", get_uname))
     app.add_handler(CommandHandler("get_uptime", get_uptime))
@@ -216,6 +337,10 @@ def main():
         fallbacks=[]
     ))
     app.add_handler(CommandHandler("get_services", get_services))
+
+    app.add_handler(CommandHandler("get_repl_logs", get_repl_logs))
+    app.add_handler(CommandHandler("get_emails", get_emails))
+    app.add_handler(CommandHandler("get_phone_numbers", get_phone_numbers))
 
     app.add_handler(MessageHandler(filters.COMMAND, unknown))
 
